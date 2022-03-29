@@ -1,0 +1,8 @@
+{
+    "CreateCluster": true,
+    "TerminateCluster": true,
+    "Steps_Staging": {
+      "StepOne": true,
+      "StepTwo": true
+    }
+}

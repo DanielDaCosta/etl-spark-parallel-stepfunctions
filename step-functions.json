@@ -1,0 +1,286 @@
+{
+    "StartAt": "Should_Create_Cluster",
+    "States": {
+      "Should_Create_Cluster": {
+        "Type": "Choice",
+        "Choices": [
+          {
+            "Variable": "$.CreateCluster",
+            "BooleanEquals": true,
+            "Next": "Create_A_Cluster"
+          },
+          {
+            "Variable": "$.CreateCluster",
+            "BooleanEquals": false,
+            "Next": "Enable_Termination_Protection"
+          }
+        ],
+        "Default": "Create_A_Cluster"
+      },
+      "Create_A_Cluster": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:createCluster.sync",
+        "Parameters": {
+          "Name": "data-transformation-etl",
+          "StepConcurrencyLevel": 5,
+          "VisibleToAllUsers": true,
+          "ReleaseLabel": "emr-6.3.0",
+          "Applications": [
+            {
+              "Name": "spark"
+            },
+            {
+              "Name": "Hive"
+            },
+            {
+              "Name": "Hadoop"
+            }
+          ],
+          "Configurations": [
+            {
+              "Classification": "spark-defaults",
+              "Properties": {
+                "spark.jars.packages": "io.delta:delta-core_2.12:1.0.0",
+                "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension",
+                "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+                "spark.sql.legacy.parquet.datetimeRebaseModeInRead": "CORRECTED",
+                "spark.sql.legacy.parquet.datetimeRebaseModeInWrite": "CORRECTED",
+                "spark.sql.legacy.parquet.int96RebaseModeInRead": "CORRECTED",
+                "spark.sql.legacy.parquet.int96RebaseModeInWrite": "CORRECTED"
+              }
+            }
+          ],
+          "ServiceRole": "EMR_DefaultRole",
+          "JobFlowRole": "EMR_EC2_DefaultRole",
+          "LogUri": "s3://aws-emr-resources-371535549456-us-east-1/elasticmapreduce/",
+          "Instances": {
+            "Ec2SubnetId": "subnet-0f60bbcd1fd8e60b1",
+            "KeepJobFlowAliveWhenNoSteps": true,
+            "InstanceFleets": [
+              {
+                "InstanceFleetType": "MASTER",
+                "TargetOnDemandCapacity": 1,
+                "InstanceTypeConfigs": [
+                  {
+                    "InstanceType": "m5.xlarge"
+                  }
+                ]
+              },
+              {
+                "InstanceFleetType": "CORE",
+                "TargetOnDemandCapacity": 1,
+                "InstanceTypeConfigs": [
+                  {
+                    "InstanceType": "c5.xlarge"
+                  }
+                ]
+              },
+              {
+                "InstanceFleetType": "TASK",
+                "TargetSpotCapacity": 3,
+                "InstanceTypeConfigs": [
+                  {
+                    "InstanceType": "c5.xlarge"
+                  }
+                ]
+              }
+            ]
+          },
+          "BootstrapActions": [
+            {
+              "Name": "CustomBootStrapAction",
+              "ScriptBootstrapAction": {
+                "Path": "s3://{YOUR_BUCKET}/python_libraries.sh",
+                "Args": []
+              }
+            }
+          ]
+        },
+        "ResultPath": "$.CreateClusterResult",
+        "Next": "Merge_Results"
+      },
+      "Merge_Results": {
+        "Type": "Pass",
+        "Parameters": {
+          "CreateCluster.$": "$.CreateCluster",
+          "TerminateCluster.$": "$.TerminateCluster",
+          "ClusterId.$": "$.CreateClusterResult.ClusterId"
+        },
+        "Result": null,
+        "Next": "Enable_Termination_Protection"
+      },
+      "Enable_Termination_Protection": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:setClusterTerminationProtection",
+        "Parameters": {
+          "ClusterId.$": "$.ClusterId",
+          "TerminationProtected": true
+        },
+        "ResultPath": null,
+        "Next": "Add_Steps_Parallel_Staging"
+      },
+      "Add_Steps_Parallel_Staging": {
+        "Type": "Parallel",
+        "Branches": [
+          {
+            "StartAt": "ExecuteOrNotStepOne_Staging",
+            "States": {
+              "ExecuteOrNotStepOne_Staging": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "And": [
+                      {
+                        "Variable": "$.Steps_Staging.StepOne",
+                        "IsPresent": true
+                      },
+                      {
+                        "Variable": "$.Steps_Staging.StepOne",
+                        "BooleanEquals": false
+                      }
+                    ],
+                    "Next": "StepOneNotExecuted_Staging"
+                  }
+                ],
+                "Default": "Step_One_Staging"
+              },
+              "StepOneNotExecuted_Staging": {
+                "Type": "Pass",
+                "End": true
+              },
+              "Step_One_Staging": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+                "Parameters": {
+                  "ClusterId.$": "$.ClusterId",
+                  "Step": {
+                    "Name": "Process ODS Data from RAW Bucket",
+                    "ActionOnFailure": "CONTINUE",
+                    "HadoopJarStep": {
+                      "Jar": "s3://us-west-1.elasticmapreduce/libs/script-runner/script-runner.jar",
+                      "Args": [
+                        "s3://{YOUR_BUCKET}/run_emr.sh"
+                      ]
+                    }
+                  }
+                },
+                "Catch": [
+                  {
+                    "ErrorEquals": [
+                      "States.TaskFailed"
+                    ],
+                    "Next": "CatchErrorStepOne_Staging"
+                  }
+                ],
+                "ResultPath": null,
+                "End": true
+              },
+              "CatchErrorStepOne_Staging": {
+                "Type": "Pass",
+                "End": true
+              }
+            }
+          },
+          {
+            "StartAt": "ExecuteOrNotStepTwo_Staging",
+            "States": {
+              "ExecuteOrNotStepTwo_Staging": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "And": [
+                      {
+                        "Variable": "$.Steps_Staging.StepTwo",
+                        "IsPresent": true
+                      },
+                      {
+                        "Variable": "$.Steps_Staging.StepTwo",
+                        "BooleanEquals": false
+                      }
+                    ],
+                    "Next": "StepTwoNotExecuted_Staging"
+                  }
+                ],
+                "Default": "Step_Two_Staging"
+              },
+              "StepTwoNotExecuted_Staging": {
+                "Type": "Pass",
+                "End": true
+              },
+              "Step_Two_Staging": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+                "Parameters": {
+                  "ClusterId.$": "$.ClusterId",
+                  "Step": {
+                    "Name": "Process ODS Data from RAW Bucket",
+                    "ActionOnFailure": "CONTINUE",
+                    "HadoopJarStep": {
+                      "Jar": "s3://us-west-1.elasticmapreduce/libs/script-runner/script-runner.jar",
+                      "Args": [
+                        "s3://{YOUR_BUCKET}/run_emr.sh"
+                      ]
+                    }
+                  }
+                },
+                "Catch": [
+                  {
+                    "ErrorEquals": [
+                      "States.TaskFailed"
+                    ],
+                    "Next": "CatchErrorStepTwo_Staging"
+                  }
+                ],
+                "ResultPath": null,
+                "End": true
+              },
+              "CatchErrorStepTwo_Staging": {
+                "Type": "Pass",
+                "End": true
+              }
+            }
+          }
+        ],
+        "ResultPath": null,
+        "Next": "Disable_Termination_Protection"
+      },
+      "Disable_Termination_Protection": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:setClusterTerminationProtection",
+        "Parameters": {
+          "ClusterId.$": "$.ClusterId",
+          "TerminationProtected": false
+        },
+        "ResultPath": null,
+        "Next": "Should_Terminate_Cluster"
+      },
+      "Should_Terminate_Cluster": {
+        "Type": "Choice",
+        "Choices": [
+          {
+            "Variable": "$.TerminateCluster",
+            "BooleanEquals": true,
+            "Next": "Terminate_Cluster"
+          },
+          {
+            "Variable": "$.TerminateCluster",
+            "BooleanEquals": false,
+            "Next": "Wrapping_Up"
+          }
+        ],
+        "Default": "Wrapping_Up"
+      },
+      "Terminate_Cluster": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster.sync",
+        "Parameters": {
+          "ClusterId.$": "$.ClusterId"
+        },
+        "Next": "Wrapping_Up"
+      },
+      "Wrapping_Up": {
+        "Type": "Pass",
+        "End": true
+      }
+    }
+  }
