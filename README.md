@@ -4,7 +4,7 @@ Execute EMR Jobs in parallel
 
 # Architecture
 
-![StepFunctionsGraph](Images/stepfunctions_graph.png)
+![StepFunctionsGraph](stepfunctions_graph.png)
 
 # Input
 
